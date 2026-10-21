@@ -1,0 +1,65 @@
+name: Android debug APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # No package-lock.json ships in the zip, so use install (not ci). Commit the lock file CI produces for reproducible builds.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Unit and persistence tests (real SQLite)
+        run: npm test
+
+      - name: Type check (informational)
+        run: npm run typecheck
+        continue-on-error: true
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Generate Android project
+        run: |
+          if [ ! -d android ]; then npx cap add android; fi
+          node scripts/patch-android.mjs
+
+      - name: Sync web assets and plugins into Android
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsinat-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload package-lock.json (commit it for reproducible builds)
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock
+          path: package-lock.json
+          if-no-files-found: warn
